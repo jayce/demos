@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,7 +171,15 @@ func parseAddr(addr string) net.IP {
 
 func SetHandles() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		Verbose("http req:", r.Method, r.RequestURI)
+		Verbose("http req:", func() string {
+			body, _ := httputil.DumpRequest(r, true)
+			return string(body)
+		}())
+
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
 
 		host := generateHost(r)
 		scheme := r.URL.Scheme
@@ -196,13 +205,20 @@ func SetHandles() {
 	})
 
 	http.HandleFunc("/feedback", func(w http.ResponseWriter, r *http.Request) {
+		Verbose("http req:", func() string {
+			body, _ := httputil.DumpRequest(r, true)
+			return string(body)
+		}())
+
 		host := r.Host
 		if v, ok := validHost.Load(host + "."); ok {
 			rdc := v.(Record)
 			rdc.HTTPRemoteAddr = r.RemoteAddr
 
 			buf, _ := json.Marshal(rdc)
+			w.Write([]byte("jsonp("))
 			w.Write(buf)
+			w.Write([]byte(");"))
 			validHost.Delete(host)
 		} else {
 			http.NotFound(w, r)
@@ -214,6 +230,8 @@ func SetHandles() {
 		if len(r.Question) == 0 {
 			return
 		}
+
+		ttl := 600
 
 		q := r.Question[0]
 		Verbose("dns query:", q.String())
@@ -234,6 +252,7 @@ func SetHandles() {
 				}
 			}
 
+			ttl = 0
 			Verbose("dns zone update:", q.Name, rcd)
 			validHost.Store(q.Name, rcd)
 		}
@@ -246,7 +265,7 @@ func SetHandles() {
 				Name:   r.Question[0].Name,
 				Rrtype: dns.TypeA,
 				Class:  dns.ClassINET,
-				Ttl:    0,
+				Ttl:    uint32(ttl),
 			},
 			A: dnsARecord,
 		}
